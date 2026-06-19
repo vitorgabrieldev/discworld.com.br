@@ -1,0 +1,106 @@
+.wrap {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  z-index: 50;
+  pointer-events: all;
+  font-family: var(--font-discord), system-ui, sans-serif;
+}
+
+.trigger {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #1e1f22;
+  border: 1px solid rgba(0, 0, 0, 0.4);
+  border-radius: 10px;
+  padding: 6px 10px 6px 6px;
+  color: #f2f3f5;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  max-width: 240px;
+  transition: background 0.12s;
+}
+.trigger:hover { background: #2b2d31; }
+
+.avatar, .avatarSm {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  overflow: hidden;
+  background: #5865f2;
+}
+.avatar { width: 28px; height: 28px; }
+.avatarSm { width: 24px; height: 24px; }
+.avatar img, .avatarSm img { object-fit: cover; }
+
+.initials { font-size: 11px; font-weight: 700; color: #fff; }
+.initialsSm { font-size: 10px; font-weight: 700; color: #fff; }
+
+.name {
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chevron { color: #b5bac1; transition: transform 0.15s; }
+.chevronOpen { transform: rotate(180deg); }
+
+/* dropdown */
+.menu {
+  margin-top: 6px;
+  min-width: 240px;
+  max-width: 300px;
+  background: #111214;
+  border: 1px solid rgba(0, 0, 0, 0.5);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  padding: 6px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+.menuTitle {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #949ba4;
+  padding: 6px 8px 4px;
+}
+.empty { font-size: 12px; color: #6d7178; padding: 6px 8px; }
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: #dbdee1;
+  text-align: left;
+  padding: 7px 8px;
+  border-radius: 6px;
+  transition: background 0.1s;
+}
+.item:hover { background: #2b2d31; }
+.itemActive { background: #404249; color: #fff; }
+
+.itemName {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.badge {
+  flex: 0 0 auto;
+  font-size: 9px;
+  font-weight: 700;
+  color: #fff;
+  background: #5865f2;
+  border-radius: 4px;
+  padding: 2px 5px;
+}

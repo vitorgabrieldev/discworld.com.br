@@ -1,0 +1,238 @@
+/* Discord-style floating voice panel */
+
+.voicePanel {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%) perspective(900px) rotateX(4deg);
+  width: 320px;
+  /* layered gradient gives the panel a subtle 3D bevel */
+  background: linear-gradient(180deg, #2a2c31 0%, #1e1f22 60%, #17181b 100%);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.06) inset,
+    0 -2px 8px rgba(0, 0, 0, 0.4) inset,
+    0 14px 34px rgba(0, 0, 0, 0.6),
+    0 4px 10px rgba(0, 0, 0, 0.5);
+  color: #dbdee1;
+  font-family: var(--font-discord), "gg sans", system-ui, sans-serif;
+  pointer-events: all;
+  overflow: visible;
+  z-index: 50;
+}
+
+/* ── connecting state ───────────────────────────────────── */
+.voiceBar {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #1e1f22;
+  border-radius: 999px;
+  padding: 8px 18px;
+  color: #b5bac1;
+  font-size: 13px;
+  pointer-events: all;
+}
+.connectingDot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #f0b232;
+  animation: pulse 1s ease-in-out infinite;
+}
+.statusText { color: #b5bac1; }
+
+/* ── header ─────────────────────────────────────────────── */
+.header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px 10px;
+}
+.headerText { display: flex; flex-direction: column; line-height: 1.2; }
+.headerText strong { color: #23a559; font-size: 13px; font-weight: 700; }
+.headerText small  { color: #949ba4; font-size: 11px; }
+
+/* animated signal bars */
+.signal {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 16px;
+}
+.signal span {
+  width: 3px;
+  background: #23a559;
+  border-radius: 1px;
+  opacity: 0.5;
+}
+.signal span:nth-child(1) { height: 6px; }
+.signal span:nth-child(2) { height: 11px; }
+.signal span:nth-child(3) { height: 16px; }
+.signalActive span {
+  opacity: 1;
+  animation: bars 0.8s ease-in-out infinite;
+}
+.signalActive span:nth-child(2) { animation-delay: 0.15s; }
+.signalActive span:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes bars {
+  0%, 100% { transform: scaleY(0.5); }
+  50%      { transform: scaleY(1); }
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.3; }
+}
+
+/* ── controls row ───────────────────────────────────────── */
+.controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 4px 14px 12px;
+}
+
+.controlGroup {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  background: linear-gradient(180deg, #34373d 0%, #25272b 100%);
+  border-radius: 10px;
+  overflow: visible;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.08) inset,
+    0 -2px 4px rgba(0, 0, 0, 0.45) inset,
+    0 3px 6px rgba(0, 0, 0, 0.4);
+}
+
+.ctrlBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 42px;
+  border: none;
+  background: transparent;
+  color: #e3e5e8;
+  cursor: pointer;
+  border-radius: 10px 0 0 10px;
+  transition: background 0.12s, color 0.12s, transform 0.06s;
+}
+.ctrlBtn:hover { background: rgba(255, 255, 255, 0.06); }
+.ctrlBtn:active { transform: translateY(1px); }
+
+.ctrlBtnDanger {
+  background: linear-gradient(180deg, #f65457 0%, #d83c3e 100%);
+  color: #fff;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.25) inset, 0 -2px 4px rgba(0, 0, 0, 0.3) inset;
+}
+.ctrlBtnDanger:hover { background: linear-gradient(180deg, #ff5e61 0%, #e04244 100%); }
+
+.chevronBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 42px;
+  border: none;
+  border-left: 1px solid rgba(0, 0, 0, 0.35);
+  background: transparent;
+  color: #b5bac1;
+  cursor: pointer;
+  border-radius: 0 10px 10px 0;
+  transition: background 0.12s, color 0.12s, transform 0.06s;
+}
+.chevronBtn:hover { background: rgba(255, 255, 255, 0.06); color: #fff; }
+.chevronBtn:active { transform: translateY(1px); }
+
+/* ── device dropdown menu ───────────────────────────────── */
+.menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  min-width: 220px;
+  max-width: 280px;
+  background: #111214;
+  border: 1px solid rgba(0, 0, 0, 0.5);
+  border-radius: 8px;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.4);
+  padding: 6px;
+  z-index: 60;
+}
+.menuTitle {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #949ba4;
+  padding: 6px 8px 4px;
+}
+.menuEmpty {
+  font-size: 12px;
+  color: #6d7178;
+  padding: 6px 8px;
+}
+.menuItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: #dbdee1;
+  font-size: 13px;
+  text-align: left;
+  padding: 7px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.menuItem:hover { background: #2b2d31; }
+.menuItemActive { color: #fff; }
+
+.menuRadio {
+  flex: 0 0 auto;
+  width: 14px; height: 14px;
+  border: 2px solid #6d7178;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.menuItemActive .menuRadio { border-color: #5865f2; }
+.menuRadio span {
+  width: 6px; height: 6px;
+  background: #5865f2;
+  border-radius: 50%;
+}
+.menuLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── footer device labels ───────────────────────────────── */
+.deviceFooter {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 14px 12px;
+  border-top: 1px solid #2b2d31;
+}
+.deviceFooter span {
+  font-size: 11px;
+  color: #949ba4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.leaveHint {
+  margin-top: 2px;
+  font-size: 10px !important;
+  color: #6d7178 !important;
+  font-style: italic;
+}
