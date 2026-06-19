@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
-import type { WorldMap, Player, Prop, Tile } from "@repo/shared";
+import type { WorldMap, Player, Prop, Tile, Painting } from "@repo/shared";
 import { useGameSocket } from "../../hooks/useGameSocket";
 import { useDiscordUser } from "../../hooks/useDiscordUser";
 import { VoiceRoom } from "./VoiceRoom";
@@ -30,7 +30,7 @@ function rowFor(dir: Direction): number {
 }
 
 // World scale: 1 tile = 1 world unit. Wall height in units.
-const WALL_H = 2.8;
+const WALL_H = 3.8;
 const PLAYER_H = 1.4; // billboard height
 const SPEED = 5.5;    // tiles per second
 
@@ -81,24 +81,24 @@ class LoopSound {
 // Derive a tangent-space normal map from a grayscale heightmap canvas (Sobel).
 // This gives the flat canvas textures real relief under the scene lights.
 function normalFromHeight(src: HTMLCanvasElement, strength = 2.0): THREE.Texture {
-  const s = src.width;
+  const w = src.width, h = src.height; // supports non-square canvases (e.g. doors)
   const sctx = src.getContext("2d")!;
-  const data = sctx.getImageData(0, 0, s, s).data;
+  const data = sctx.getImageData(0, 0, w, h).data;
   const lum = (x: number, y: number) => {
-    x = (x + s) % s; y = (y + s) % s;
-    const i = (y * s + x) * 4;
+    x = (x + w) % w; y = (y + h) % h;
+    const i = (y * w + x) * 4;
     return (data[i]! * 0.299 + data[i + 1]! * 0.587 + data[i + 2]! * 0.114) / 255;
   };
   const out = document.createElement("canvas");
-  out.width = out.height = s;
+  out.width = w; out.height = h;
   const octx = out.getContext("2d")!;
-  const img = octx.createImageData(s, s);
-  for (let y = 0; y < s; y++) {
-    for (let x = 0; x < s; x++) {
+  const img = octx.createImageData(w, h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
       const dx = (lum(x - 1, y) - lum(x + 1, y)) * strength;
       const dy = (lum(x, y - 1) - lum(x, y + 1)) * strength;
       const len = Math.hypot(dx, dy, 1);
-      const i = (y * s + x) * 4;
+      const i = (y * w + x) * 4;
       img.data[i]     = ((dx / len) * 0.5 + 0.5) * 255;
       img.data[i + 1] = ((dy / len) * 0.5 + 0.5) * 255;
       img.data[i + 2] = (1 / len) * 0.5 * 255 + 127;
@@ -154,64 +154,136 @@ function makeWoodFloorTexture(): THREE.Texture {
   return tex;
 }
 
-function makeLogWallTexture(): THREE.Texture {
-  const s = 256;
+// Painted plaster wall: a near-white, warm-neutral surface with very fine
+// orange-peel grain and faint broad mottling (subtle unevenness). The relief
+// comes from the high-frequency speckle when this canvas is turned into a
+// normal map, so the wall reads as matte plaster rather than flat color.
+function makePlasterTexture(): THREE.Texture {
+  const s = 512;
   const c = document.createElement("canvas");
   c.width = c.height = s;
   const ctx = c.getContext("2d")!;
-  const logs = 5;
-  const lh = s / logs;
-  for (let i = 0; i < logs; i++) {
-    const ly = i * lh;
-    const g = ctx.createLinearGradient(0, ly, 0, ly + lh);
-    g.addColorStop(0,    "#3d2812");
-    g.addColorStop(0.35, "#6e4a24");
-    g.addColorStop(0.55, "#5a3d1e");
-    g.addColorStop(1,    "#33220f");
+
+  // Base off-white (warm neutral, like the reference photo)
+  ctx.fillStyle = "#e9e7e1";
+  ctx.fillRect(0, 0, s, s);
+
+  // Faint broad mottles — gentle light/dark clouds for natural unevenness
+  for (let i = 0; i < 18; i++) {
+    const x = Math.random() * s, y = Math.random() * s;
+    const r = 40 + Math.random() * 130;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    const dark = Math.random() > 0.5;
+    g.addColorStop(0, dark ? "rgba(120,110,95,0.05)" : "rgba(255,255,255,0.06)");
+    g.addColorStop(1, "rgba(0,0,0,0)");
     ctx.fillStyle = g;
-    ctx.fillRect(0, ly, s, lh);
-    // seam shadow
-    ctx.fillStyle = "rgba(0,0,0,0.5)";
-    ctx.fillRect(0, ly + lh - 3, s, 3);
-    // top sheen
-    ctx.fillStyle = "rgba(255,255,255,0.10)";
-    ctx.fillRect(0, ly + 2, s, 2);
-    // grain
-    ctx.strokeStyle = "rgba(0,0,0,0.10)";
-    ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(0, ly + lh * 0.5);
-    ctx.bezierCurveTo(s * 0.3, ly + lh * 0.5 + 3, s * 0.6, ly + lh * 0.5 - 3, s, ly + lh * 0.5);
-    ctx.stroke();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
   }
+
+  // Fine per-pixel speckle — the plaster grain (drives the normal-map relief)
+  const img = ctx.getImageData(0, 0, s, s);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const n = (Math.random() - 0.5) * 16; // ±~6% luminance jitter
+    d[i]     = Math.max(0, Math.min(255, d[i]! + n));
+    d[i + 1] = Math.max(0, Math.min(255, d[i + 1]! + n));
+    d[i + 2] = Math.max(0, Math.min(255, d[i + 2]! + n));
+  }
+  ctx.putImageData(img, 0, 0);
+
+  // Sparse tiny stipple bumps — the "orange peel" pits/highlights
+  for (let i = 0; i < 2600; i++) {
+    const x = Math.random() * s, y = Math.random() * s;
+    ctx.fillStyle = Math.random() > 0.5 ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.05)";
+    ctx.fillRect(x, y, 1.4, 1.4);
+  }
+
   const tex = new THREE.CanvasTexture(c);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.anisotropy = 8;
   return tex;
 }
 
-function makeLogTopTexture(): THREE.Texture {
-  const s = 128;
+// Dark walnut door with two recessed panels. The panel bevels are drawn as
+// luminance ramps (frame = brighter/higher, field = darker/lower) so that the
+// derived normal map turns them into real 3D relief under the scene lights.
+function makeDoorTexture(): THREE.Texture {
+  // Canvas aspect (256/660 ≈ 0.388) matches the leaf face (leafLen / DOOR_H),
+  // so the texture maps 1:1 with no stretching.
+  const W = 256, H = 660;
   const c = document.createElement("canvas");
-  c.width = c.height = s;
+  c.width = W; c.height = H;
   const ctx = c.getContext("2d")!;
-  ctx.fillStyle = "#6e4a24";
-  ctx.fillRect(0, 0, s, s);
-  const logs = 4;
-  const lw = s / logs;
-  for (let i = 0; i < logs; i++) {
-    const lx = i * lw;
-    const g = ctx.createLinearGradient(lx, 0, lx + lw, 0);
-    g.addColorStop(0,   "#5a3d1e");
-    g.addColorStop(0.5, "#8a5e30");
-    g.addColorStop(1,   "#4a3018");
-    ctx.fillStyle = g;
-    ctx.fillRect(lx, 0, lw, s);
-    ctx.fillStyle = "rgba(0,0,0,0.35)";
-    ctx.fillRect(lx + lw - 2, 0, 2, s);
+
+  const baseR = 74, baseG = 50, baseB = 32; // #4a3220 — dark walnut frame tone
+  const frameCol = `rgb(${baseR},${baseG},${baseB})`;
+  const fieldCol = `rgb(${baseR - 26},${baseG - 19},${baseB - 12})`; // recessed field (lower → darker)
+
+  ctx.fillStyle = frameCol;
+  ctx.fillRect(0, 0, W, H);
+
+  // vertical plank streaks across the whole leaf
+  for (let i = 0; i < 95; i++) {
+    const x = Math.random() * W;
+    const wdt = 1 + Math.random() * 2.6;
+    const sh = (Math.random() - 0.5) * 28;
+    ctx.fillStyle = `rgba(${Math.max(0, baseR + sh) | 0},${Math.max(0, baseG + sh * 0.7) | 0},${Math.max(0, baseB + sh * 0.5) | 0},0.5)`;
+    ctx.fillRect(x, 0, wdt, H);
   }
+  // long wavy grain lines
+  ctx.strokeStyle = "rgba(0,0,0,0.12)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 24; i++) {
+    const x0 = Math.random() * W;
+    ctx.beginPath();
+    ctx.moveTo(x0, 0);
+    for (let y = 0; y <= H; y += 16) ctx.lineTo(x0 + Math.sin(y * 0.02 + i) * 3, y);
+    ctx.stroke();
+  }
+
+  // ── two recessed panels ──────────────────────────────────────────────
+  const stile = W * 0.15;          // side rails
+  const railT = H * 0.055;         // top rail
+  const railB = H * 0.085;         // bottom rail
+  const midY  = H * 0.52, midH = H * 0.055; // lock rail (between panels)
+  const bevel = 16;
+
+  const panel = (px: number, py: number, pw: number, ph: number) => {
+    ctx.fillStyle = fieldCol;
+    ctx.fillRect(px, py, pw, ph);
+    // four bevel ramps frame(high) → field(low)
+    let g = ctx.createLinearGradient(0, py, 0, py + bevel);
+    g.addColorStop(0, frameCol); g.addColorStop(1, fieldCol);
+    ctx.fillStyle = g; ctx.fillRect(px, py, pw, bevel);                       // top
+    g = ctx.createLinearGradient(0, py + ph - bevel, 0, py + ph);
+    g.addColorStop(0, fieldCol); g.addColorStop(1, frameCol);
+    ctx.fillStyle = g; ctx.fillRect(px, py + ph - bevel, pw, bevel);          // bottom
+    g = ctx.createLinearGradient(px, 0, px + bevel, 0);
+    g.addColorStop(0, frameCol); g.addColorStop(1, fieldCol);
+    ctx.fillStyle = g; ctx.fillRect(px, py, bevel, ph);                       // left
+    g = ctx.createLinearGradient(px + pw - bevel, 0, px + pw, 0);
+    g.addColorStop(0, fieldCol); g.addColorStop(1, frameCol);
+    ctx.fillStyle = g; ctx.fillRect(px + pw - bevel, py, bevel, ph);          // right
+    // a thin moulded bead just inside the bevel
+    ctx.strokeStyle = "rgba(255,255,255,0.05)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(px + bevel * 0.6, py + bevel * 0.6, pw - bevel * 1.2, ph - bevel * 1.2);
+  };
+
+  panel(stile, railT, W - stile * 2, midY - railT);                   // upper panel
+  panel(stile, midY + midH, W - stile * 2, H - railB - (midY + midH)); // lower panel
+
+  // darken the extreme leaf edge a touch
+  ctx.strokeStyle = "rgba(0,0,0,0.30)";
+  ctx.lineWidth = 3;
+  ctx.strokeRect(1.5, 1.5, W - 3, H - 3);
+
   const tex = new THREE.CanvasTexture(c);
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
   return tex;
 }
 
@@ -413,13 +485,43 @@ function buildWorld(scene: THREE.Scene, map: WorldMap, tex: {
   const floorMat    = new THREE.MeshStandardMaterial({ map: tex.floor, roughness: 0.85, normalMap: nrm(tex.floor, 2.5), normalScale: ns });
   const corridorMat = new THREE.MeshStandardMaterial({ map: tex.corridor, roughness: 0.8, normalMap: nrm(tex.corridor, 2.5), normalScale: ns });
   const grassMat    = new THREE.MeshStandardMaterial({ map: tex.grass, roughness: 1, normalMap: nrm(tex.grass, 1.5), normalScale: ns });
-  const wallSideMat = new THREE.MeshStandardMaterial({ map: tex.wall, roughness: 0.92, normalMap: nrm(tex.wall, 3.5), normalScale: new THREE.Vector2(1.4, 1.4) });
-  const wallTopMat  = new THREE.MeshStandardMaterial({ map: tex.wallTop, roughness: 0.92, normalMap: nrm(tex.wallTop, 3), normalScale: ns });
-  const doorMat     = new THREE.MeshStandardMaterial({ color: "#8b5e1a", roughness: 0.6 });
-  const knobMat     = new THREE.MeshStandardMaterial({ color: "#f0c040", roughness: 0.3, metalness: 0.6 });
+  // Matte painted plaster: fine grain, very gentle relief. Tile (1,4) keeps the
+  // grain near-square on the 1m×3.8m wall face and small enough to read as a
+  // wall finish (not a pattern). The normal map MUST share the color map's
+  // .repeat or the relief desyncs from the surface.
+  const wallNrm = nrm(tex.wall, 1.4);
+  tex.wall.repeat.set(1, 4);
+  wallNrm.repeat.set(1, 4);
+  const wallSideMat = new THREE.MeshStandardMaterial({ map: tex.wall, roughness: 0.96, normalMap: wallNrm, normalScale: new THREE.Vector2(0.45, 0.45) });
 
-  const isWalkable = (t?: Tile | null) =>
-    !!t && (t.type === "floor" || t.type === "door" || t.type === "corridor");
+  const wallTopNrm = nrm(tex.wallTop, 1.4);
+  tex.wallTop.repeat.set(1, 1);
+  wallTopNrm.repeat.set(1, 1);
+  const wallTopMat  = new THREE.MeshStandardMaterial({ map: tex.wallTop, roughness: 0.96, normalMap: wallTopNrm, normalScale: new THREE.Vector2(0.45, 0.45) });
+  // Dark walnut door: textured + normal-mapped so the recessed panels read 3D.
+  const doorTex = makeDoorTexture();
+  const doorNrm = nrm(doorTex, 3.0);
+  const doorMat = new THREE.MeshStandardMaterial({
+    map: doorTex, normalMap: doorNrm, normalScale: new THREE.Vector2(1.3, 1.3),
+    roughness: 0.66, metalness: 0.04,
+  });
+
+  // Brass knob hardware (shared geometries; knob protrudes along local +Z).
+  const brassMat  = new THREE.MeshStandardMaterial({ color: "#c9a23f", roughness: 0.26, metalness: 0.95 });
+  const brassDark = new THREE.MeshStandardMaterial({ color: "#9c7a2e", roughness: 0.36, metalness: 0.9 });
+  const rosetteGeo = new THREE.CylinderGeometry(0.062, 0.068, 0.02, 18); rosetteGeo.rotateX(Math.PI / 2);
+  const stemGeo    = new THREE.CylinderGeometry(0.017, 0.024, 0.05, 14); stemGeo.rotateX(Math.PI / 2);
+  const ballGeo    = new THREE.SphereGeometry(0.046, 18, 14);
+  function buildKnob(): THREE.Group {
+    const k = new THREE.Group();
+    const ros  = new THREE.Mesh(rosetteGeo, brassDark); ros.position.z  = 0.01;
+    const stem = new THREE.Mesh(stemGeo, brassMat);     stem.position.z = 0.04;
+    const ball = new THREE.Mesh(ballGeo, brassMat);     ball.position.z = 0.08; ball.scale.set(1, 1, 0.82);
+    k.add(ros, stem, ball);
+    k.traverse((o) => { (o as THREE.Mesh).castShadow = true; });
+    return k;
+  }
+
   const isWall = (x: number, y: number) => map.tiles[y]?.[x]?.type === "wall";
 
   // ── Ground (one flat quad per tile, instanced by surface type) ─────────
@@ -464,50 +566,173 @@ function buildWorld(scene: THREE.Scene, map: WorldMap, tex: {
   groundInstanced(corridors, corridorMat);
   groundInstanced(grasses, grassMat, -0.02); // grass slightly lower than floor
 
-  // ── Thin walls: emit a slim panel on each wall FACE that meets a walkable
-  // tile (or the outdoors). Panels are merged into one BufferGeometry. ──────
-  const THICK = 0.08; // wall thickness in world units (thin panels)
-  const panels: THREE.BufferGeometry[] = [];
+  // ── Walls: solid, thin slabs centered on each wall tile. A straight run
+  // gets one slab; a corner/junction gets two crossed slabs (a clean joint);
+  // an isolated tile becomes a post. Doorways get only a header slab above the
+  // opening so the wall carries on over the door (solid, never hollow). ──────
+  const WALL_TH = 0.5; // visual wall thickness (centered in the tile)
+  const DOOR_H  = 2.6; // door opening height; wall continues above as a header
+  const SILL = 1.0, HEAD = 2.5; // window opening: wall below the sill + header above
+  const WIN_SPACING = 4;        // modular: a (2-tile-wide) window every N tiles along an exterior run
+  const slabs: THREE.BufferGeometry[] = [];
   const caps: THREE.BufferGeometry[] = [];
+  const winFrames: THREE.BufferGeometry[] = [];
+  const winGlass: THREE.BufferGeometry[] = [];
 
-  function panel(cx: number, cz: number, dir: 0 | 1 | 2 | 3) {
-    // dir: 0=+x(east) 1=-x(west) 2=+z(south) 3=-z(north)
-    const g = new THREE.BoxGeometry(
-      dir < 2 ? THICK : 1,
-      WALL_H,
-      dir < 2 ? 1 : THICK,
-    );
-    let ox = 0, oz = 0;
-    if (dir === 0) ox = 0.5 - THICK / 2;
-    if (dir === 1) ox = -0.5 + THICK / 2;
-    if (dir === 2) oz = 0.5 - THICK / 2;
-    if (dir === 3) oz = -0.5 + THICK / 2;
-    g.translate(cx + 0.5 + ox, WALL_H / 2, cz + 0.5 + oz);
-    panels.push(g);
-  }
+  const box = (
+    list: THREE.BufferGeometry[],
+    w: number, h: number, d: number, cx: number, cy: number, cz: number,
+  ) => {
+    const g = new THREE.BoxGeometry(w, h, d);
+    g.translate(cx, cy, cz);
+    list.push(g);
+  };
 
+  const LIP = WALL_TH + 0.06; // coping cap is a touch wider than the wall
+
+  // A tile counts as "outside" if it's grass or beyond the map edge.
+  const outside = (xx: number, yy: number) => {
+    const tt = map.tiles[yy]?.[xx];
+    return !tt || tt.type === "grass";
+  };
+
+  // A window needs a CLEAN exterior stretch: across the tile and its run
+  // neighbours, the outer side faces outdoors and the inner side is open room
+  // (never a wall). Keeps windows off corners and away from any interior wall
+  // meeting the façade (which would otherwise sit right in front of the glass).
+  const cleanWin = (x: number, y: number, horizontal: boolean): boolean => {
+    if (horizontal) {
+      if (!(isWall(x - 1, y) && isWall(x + 1, y))) return false;
+      const nOut = outside(x, y - 1), sOut = outside(x, y + 1);
+      if (nOut === sOut) return false;
+      const oy = nOut ? y - 1 : y + 1, iy = nOut ? y + 1 : y - 1;
+      return outside(x - 1, oy) && outside(x, oy) && outside(x + 1, oy)
+          && !isWall(x - 1, iy) && !isWall(x, iy) && !isWall(x + 1, iy);
+    }
+    if (!(isWall(x, y - 1) && isWall(x, y + 1))) return false;
+    const eOut = outside(x + 1, y), wOut = outside(x - 1, y);
+    if (eOut === wOut) return false;
+    const ox = eOut ? x + 1 : x - 1, ix = eOut ? x - 1 : x + 1;
+    return outside(ox, y - 1) && outside(ox, y) && outside(ox, y + 1)
+        && !isWall(ix, y - 1) && !isWall(ix, y) && !isWall(ix, y + 1);
+  };
+
+  // Pre-pass: place windows at the modular interval, each spanning 2 tiles when
+  // the next tile is also a clean stretch (wider windows), else 1 tile.
+  type WinInfo = { horizontal: boolean; anchor: boolean; span: number };
+  const winInfo = new Map<string, WinInfo>();
+  const wkey = (x: number, y: number) => `${x},${y}`;
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
-      if (!isWall(x, y)) continue;
-      const east  = map.tiles[y]?.[x + 1];
-      const west  = map.tiles[y]?.[x - 1];
-      const south = map.tiles[y + 1]?.[x];
-      const north = map.tiles[y - 1]?.[x];
-      // a face is exposed if the neighbour is walkable OR grass (outdoor side)
-      const exp = (t?: Tile | null) => isWalkable(t) || t?.type === "grass" || !t;
-      if (exp(east))  panel(x, y, 0);
-      if (exp(west))  panel(x, y, 1);
-      if (exp(south)) panel(x, y, 2);
-      if (exp(north)) panel(x, y, 3);
-      // top cap (small box) so the wall reads as a beam from above
-      const cap = new THREE.BoxGeometry(1, 0.1, 1);
-      cap.translate(x + 0.5, WALL_H + 0.05, y + 0.5);
-      caps.push(cap);
+      if (map.tiles[y]?.[x]?.type !== "wall" || winInfo.has(wkey(x, y))) continue;
+      const horizontal = x % WIN_SPACING === 0 && cleanWin(x, y, true) ? true
+                       : y % WIN_SPACING === 0 && cleanWin(x, y, false) ? false
+                       : null;
+      if (horizontal === null) continue;
+      const nx = horizontal ? x + 1 : x, ny = horizontal ? y : y + 1;
+      const canPair = map.tiles[ny]?.[nx]?.type === "wall"
+                   && !winInfo.has(wkey(nx, ny))
+                   && cleanWin(nx, ny, horizontal);
+      winInfo.set(wkey(x, y), { horizontal, anchor: true, span: canPair ? 2 : 1 });
+      if (canPair) winInfo.set(wkey(nx, ny), { horizontal, anchor: false, span: 0 });
     }
   }
 
-  if (panels.length) {
-    const merged = mergeGeometries(panels);
+  // Glass + a SLIM cased, silled, mullioned frame filling the opening
+  // (SILL→HEAD), centred on the span. The frame and glazing bars are thin in
+  // depth (not as deep as the wall) — a delicate window set in the reveal.
+  const FB = 0.05;        // sash frame bar width (in-plane)
+  const BAR_W = 0.028;    // glazing bar (muntin) width — slim grid
+  const CASE_T = 0.09;    // outer casing (architrave) width
+  const SASH_D = 0.10;    // frame/bar DEPTH across the wall — slim, not wall-deep
+  const glassD = 0.03;
+  const winMidY = (SILL + HEAD) / 2, winOpenH = HEAD - SILL;
+  const addWindow = (horizontal: boolean, ca: number, cc: number, hw: number, cols: number) => {
+    // place a box via along/cross mapping (along = wall run; cc = wall centre)
+    const put = (
+      list: THREE.BufferGeometry[],
+      aLen: number, yLen: number, dLen: number, aPos: number, yPos: number,
+    ) => {
+      if (horizontal) box(list, aLen, yLen, dLen, aPos, yPos, cc);
+      else            box(list, dLen, yLen, aLen, cc, yPos, aPos);
+    };
+    const fullW = 2 * hw, caseD = SASH_D + 0.05, barD = SASH_D * 0.8;
+    // outer casing (flat architrave around the opening)
+    put(winFrames, fullW + 2 * CASE_T, CASE_T, caseD, ca, HEAD + CASE_T / 2);
+    put(winFrames, CASE_T, winOpenH + 2 * CASE_T, caseD, ca - hw - CASE_T / 2, winMidY);
+    put(winFrames, CASE_T, winOpenH + 2 * CASE_T, caseD, ca + hw + CASE_T / 2, winMidY);
+    // inner sash frame
+    put(winFrames, fullW + 2 * FB, FB, SASH_D, ca, HEAD);            // head rail
+    put(winFrames, fullW + 2 * FB, FB, SASH_D, ca, SILL);           // sill rail
+    put(winFrames, FB, winOpenH, SASH_D, ca - hw - FB / 2, winMidY); // left stile
+    put(winFrames, FB, winOpenH, SASH_D, ca + hw + FB / 2, winMidY); // right stile
+    // glazing bars: (cols-1) vertical + one horizontal → a slim grid of panes
+    for (let i = 1; i < cols; i++) {
+      put(winFrames, BAR_W, winOpenH, barD, ca - hw + (fullW * i) / cols, winMidY);
+    }
+    put(winFrames, fullW, BAR_W, barD, ca, winMidY);               // horizontal bar
+    // slim protruding sill ledge
+    put(winFrames, fullW + 2 * CASE_T, 0.05, SASH_D + 0.12, ca, SILL - CASE_T);
+    // glass
+    put(winGlass, fullW, winOpenH, glassD, ca, winMidY);
+  };
+
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const t = map.tiles[y]?.[x];
+      const isW = t?.type === "wall";
+      const isDoor = t?.type === "door";
+      if (!isW && !isDoor) continue;
+
+      const runEW = isWall(x - 1, y) || isWall(x + 1, y); // part of an E–W run
+      const runNS = isWall(x, y - 1) || isWall(x, y + 1); // part of a N–S run
+      const cx = x + 0.5, cz = y + 0.5;
+
+      if (isW) {
+        const win = winInfo.get(wkey(x, y));
+        if (win) {
+          // window tile: wall below the sill + header above, opening between
+          const upH = WALL_H - HEAD;
+          if (win.horizontal) {
+            box(slabs, 1, SILL, WALL_TH, cx, SILL / 2, cz);
+            box(slabs, 1, upH, WALL_TH, cx, HEAD + upH / 2, cz);
+            box(caps, 1, 0.12, LIP, cx, WALL_H + 0.06, cz);
+          } else {
+            box(slabs, WALL_TH, SILL, 1, cx, SILL / 2, cz);
+            box(slabs, WALL_TH, upH, 1, cx, HEAD + upH / 2, cz);
+            box(caps, LIP, 0.12, 1, cx, WALL_H + 0.06, cz);
+          }
+          // the anchor draws the (possibly 2-tile-wide) glazed frame, centred
+          if (win.anchor) {
+            const ca = (win.horizontal ? cx : cz) + (win.span - 1) * 0.5;
+            const cc = win.horizontal ? cz : cx;
+            addWindow(win.horizontal, ca, cc, win.span * 0.5 - 0.1, win.span + 1);
+          }
+        } else {
+          if (runEW) box(slabs, 1, WALL_H, WALL_TH, cx, WALL_H / 2, cz);
+          if (runNS) box(slabs, WALL_TH, WALL_H, 1, cx, WALL_H / 2, cz);
+          if (!runEW && !runNS) box(slabs, WALL_TH, WALL_H, WALL_TH, cx, WALL_H / 2, cz);
+          // matching coping cap(s) on top
+          if (runEW) box(caps, 1, 0.12, LIP, cx, WALL_H + 0.06, cz);
+          if (runNS) box(caps, LIP, 0.12, 1, cx, WALL_H + 0.06, cz);
+          if (!runEW && !runNS) box(caps, LIP, 0.12, LIP, cx, WALL_H + 0.06, cz);
+        }
+      } else {
+        // doorway header: solid slab from DOOR_H to WALL_H, matching orientation
+        const h = WALL_H - DOOR_H;
+        if (runEW) {
+          box(slabs, 1, h, WALL_TH, cx, DOOR_H + h / 2, cz);
+          box(caps, 1, 0.12, LIP, cx, WALL_H + 0.06, cz);
+        } else {
+          box(slabs, WALL_TH, h, 1, cx, DOOR_H + h / 2, cz);
+          box(caps, LIP, 0.12, 1, cx, WALL_H + 0.06, cz);
+        }
+      }
+    }
+  }
+
+  if (slabs.length) {
+    const merged = mergeGeometries(slabs);
     const mesh = new THREE.Mesh(merged, wallSideMat);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
@@ -519,13 +744,31 @@ function buildWorld(scene: THREE.Scene, map: WorldMap, tex: {
     mesh.castShadow = true;
     scene.add(mesh);
   }
+  if (winFrames.length) {
+    const frameMat = new THREE.MeshStandardMaterial({ color: "#ece9e2", roughness: 0.5, metalness: 0.0 });
+    const mesh = new THREE.Mesh(mergeGeometries(winFrames), frameMat);
+    mesh.castShadow = true;
+    scene.add(mesh);
+  }
+  if (winGlass.length) {
+    // Translucent glass — you can see the garden / city through it.
+    const glassMat = new THREE.MeshStandardMaterial({
+      color: "#bfe0f5", transparent: true, opacity: 0.24,
+      roughness: 0.06, metalness: 0.0,
+      emissive: 0x213a4a, emissiveIntensity: 0.15,
+      side: THREE.DoubleSide, depthWrite: false,
+    });
+    const mesh = new THREE.Mesh(mergeGeometries(winGlass), glassMat);
+    scene.add(mesh);
+  }
 
   // ── Doors: group adjacent door tiles into doorways (1 or 2 tiles wide),
   // then build a hinged leaf per tile. A 2-tile doorway becomes a double door
   // whose two leaves swing apart. Each leaf hinges at the doorway's outer edge.
   const doorObjs: DoorObj[] = [];
   const LEAF_T = 0.1;                 // leaf thickness
-  const DOOR_H = WALL_H * 0.92;
+  // DOOR_H is defined above (the doorway opening height); the wall continues
+  // above it as a header. The leaf is just under that so it clears the opening.
   const LEAF_W = 0.96;               // leaf covers ~1 tile
 
   const doorSet = new Set(doors.map((d) => `${d.x},${d.z}`));
@@ -591,19 +834,21 @@ function buildWorld(scene: THREE.Scene, map: WorldMap, tex: {
       leaf.castShadow = true;
       pivot.add(leaf);
 
-      // one knob per leaf, set back a little from the free edge, with a small
-      // matching knob on the other face so it reads from both sides. Single
-      // doors get the pair; double doors meet as a tidy french-door look.
-      const knobGeo = new THREE.SphereGeometry(0.045, 8, 6);
+      // A brass knob on each face (so it reads from both sides), set back from
+      // the free edge. The assembly protrudes along the door's normal axis: Z
+      // when the leaf lies along X, else X — flipped per face.
       const knobAlong = leafLen - 0.2; // back from the free tip
       for (const face of [1, -1]) {
-        const knob = new THREE.Mesh(knobGeo, knobMat);
-        knob.position.set(
-          alongX ? knobAlong * dirSign : (LEAF_T / 2 + 0.05) * face,
+        const k = buildKnob();
+        k.rotation.y = alongX
+          ? (face === 1 ? 0 : Math.PI)
+          : (face === 1 ? Math.PI / 2 : -Math.PI / 2);
+        k.position.set(
+          alongX ? knobAlong * dirSign : (LEAF_T / 2) * face,
           DOOR_H * 0.46,
-          alongX ? (LEAF_T / 2 + 0.05) * face : knobAlong * dirSign,
+          alongX ? (LEAF_T / 2) * face : knobAlong * dirSign,
         );
-        pivot.add(knob);
+        pivot.add(k);
       }
 
       // hinge sits at the outer edge of this leaf's tile (opposite dirSign)
@@ -709,6 +954,104 @@ function buildProps(scene: THREE.Scene, props: Prop[]) {
     }
   }
   scene.add(group);
+}
+
+// ── Framed wall paintings ───────────────────────────────────────────────────
+// Placement comes pre-computed (seeded) from the map; here we just build a
+// gilded frame + the picture and mount it flush against the wall, facing in.
+const PAINTING_SRCS = [
+  "/paintings/painting-1.png",
+  "/paintings/painting-2.png",
+  "/paintings/painting-3.png",
+];
+// w/h of each shipped image — lets us size the frame without waiting on load.
+const PAINTING_ASPECT = [514 / 600, 500 / 498, 720 / 1440];
+
+function buildPaintings(scene: THREE.Scene, paintings: Painting[]) {
+  if (!paintings || paintings.length === 0) return;
+
+  const CENTER_Y    = 1.55;  // fixed, comfortable hang height (picture center)
+  const FRAME_DEPTH = 0.07;
+  const MOLDING     = 0.07;  // frame border width (world units)
+  // Distance from the room/wall tile boundary to the wall face. Walls are thin
+  // slabs centered in their tile (buildWorld WALL_TH=0.5), so the face sits
+  // 0.5 − WALL_TH/2 = 0.25 inside the boundary. Mounts the frame flush.
+  const WALL_FACE_INSET = 0.25;
+
+  const loader = new THREE.TextureLoader();
+  // One shared picture material per image (texture loaded once, reused).
+  const picMats = PAINTING_SRCS.map((src) => {
+    const tex = loader.load(src);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 8;
+    return new THREE.MeshStandardMaterial({
+      map: tex,
+      emissive: 0xffffff,
+      emissiveMap: tex,
+      emissiveIntensity: 0.22, // keep art legible even in a shadowed room
+      roughness: 0.85,
+      metalness: 0,
+    });
+  });
+
+  // Gilded wood molding + dark backing, shared across every painting.
+  const frameMat = new THREE.MeshStandardMaterial({ color: "#b0863a", roughness: 0.42, metalness: 0.55 });
+  const backMat  = new THREE.MeshStandardMaterial({ color: "#1a140d", roughness: 0.9 });
+
+  const dirFor = (f: Painting["facing"]) =>
+    f === "south" ? { x: 0,  z: 1,  ry: 0 }
+    : f === "north" ? { x: 0,  z: -1, ry: Math.PI }
+    : f === "east"  ? { x: 1,  z: 0,  ry: Math.PI / 2 }
+    :                 { x: -1, z: 0,  ry: -Math.PI / 2 };
+
+  const root = new THREE.Group();
+
+  for (const pa of paintings) {
+    const idx = ((pa.image % PAINTING_SRCS.length) + PAINTING_SRCS.length) % PAINTING_SRCS.length;
+    const aspect = PAINTING_ASPECT[idx] ?? 1;
+    const picH = pa.height;
+    const picW = picH * aspect;
+
+    const g = new THREE.Group();
+    const d = dirFor(pa.facing);
+    g.rotation.y = d.ry;
+    // Mount the frame's back flush with the wall face, extending into the room.
+    g.position.set(
+      pa.x - d.x * WALL_FACE_INSET,
+      CENTER_Y,
+      pa.y - d.z * WALL_FACE_INSET,
+    );
+
+    // backing board (hides any sliver of wall behind the picture)
+    const back = new THREE.Mesh(
+      new THREE.BoxGeometry(picW + MOLDING, picH + MOLDING, 0.02),
+      backMat,
+    );
+    back.position.z = FRAME_DEPTH * 0.35;
+    g.add(back);
+
+    // the picture itself, slightly recessed within the frame
+    const pic = new THREE.Mesh(new THREE.PlaneGeometry(picW, picH), picMats[idx]!);
+    pic.position.z = FRAME_DEPTH * 0.72;
+    g.add(pic);
+
+    // four molding bars around the picture
+    const halfW = picW / 2, halfH = picH / 2, m2 = MOLDING / 2;
+    const bar = (w: number, h: number, x: number, y: number) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, FRAME_DEPTH), frameMat);
+      m.position.set(x, y, FRAME_DEPTH / 2);
+      m.castShadow = true;
+      g.add(m);
+    };
+    bar(picW + MOLDING * 2, MOLDING, 0, halfH + m2);     // top
+    bar(picW + MOLDING * 2, MOLDING, 0, -(halfH + m2));  // bottom
+    bar(MOLDING, picH, -(halfW + m2), 0);                // left
+    bar(MOLDING, picH, halfW + m2, 0);                   // right
+
+    root.add(g);
+  }
+
+  scene.add(root);
 }
 
 // ── Surroundings: white picket fence, a ring road, and background buildings ─
@@ -1017,6 +1360,28 @@ export function WorldView({ guildId }: Props) {
   const { user, loading: userLoading } = useDiscordUser();
   const { map, players, localPosition, movePlayer, currentRoomId } = useGameSocket(guildId, user);
 
+  // Mic permission: "pending" until the user responds to the pre-game prompt.
+  // Requesting before the 3D loop starts avoids the stuck-key bug caused by the
+  // browser permission dialog stealing focus while a key is held down.
+  const [micPermission, setMicPermission] = useState<"pending" | "granted" | "denied">("pending");
+
+  // Skip the card if the browser already has a stored decision for this origin.
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !navigator.permissions) return;
+    navigator.permissions
+      .query({ name: "microphone" as PermissionName })
+      .then((status) => {
+        // Only skip the card when already granted — for "denied" and "prompt"
+        // we still show it so the user knows their mic status up front.
+        if (status.state === "granted") setMicPermission("granted");
+        status.onchange = () => {
+          if (status.state === "granted") setMicPermission("granted");
+          else if (status.state === "denied") setMicPermission("denied");
+        };
+      })
+      .catch(() => {});
+  }, []);
+
   const keysRef = useRef<Set<string>>(new Set());
   const playersRef = useRef(players);
   const mapRef = useRef(map);
@@ -1084,13 +1449,14 @@ export function WorldView({ guildId }: Props) {
     // ── Build world ──────────────────────────────────────────────────────
     const tex = {
       floor: makeWoodFloorTexture(),
-      wall: makeLogWallTexture(),
-      wallTop: makeLogTopTexture(),
+      wall: makePlasterTexture(),
+      wallTop: makePlasterTexture(),
       corridor: makeCorridorTexture(),
       grass: makeGrassTexture(),
     };
     const doorObjs = buildWorld(scene, worldMap, tex);
     buildProps(scene, worldMap.props ?? []);
+    buildPaintings(scene, worldMap.paintings ?? []);
     buildSurroundings(scene, worldMap.width, worldMap.height);
 
     // ── Channel signs: a plaque floating in the middle of each room ──────
@@ -1453,19 +1819,45 @@ export function WorldView({ guildId }: Props) {
     );
   }
 
+  async function requestMic() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((t) => t.stop());
+      setMicPermission("granted");
+    } catch {
+      setMicPermission("denied");
+    }
+  }
+
   return (
     <div className={styles.container}>
       <div ref={mountRef} className={styles.canvas} style={{ width: "100vw", height: "100vh" }} />
       {/* first-person crosshair */}
       <div className={styles.crosshair} />
       <ServerSwitcher currentGuildId={guildId} />
-      {activeVoiceRoom && user && (
+      {micPermission === "pending" && (
+        <div className={styles.micHud}>
+          <div className={styles.micCard}>
+            <div className={styles.micIcon}>🎙️</div>
+            <h2>PERMISSÃO DE MIC</h2>
+            <p>Para falar nas salas de voz permita o acesso ao microfone.</p>
+            <button className={styles.micPrimaryBtn} onClick={requestMic}>
+              ▶ PERMITIR
+            </button>
+            <button className={styles.micSkipBtn} onClick={() => setMicPermission("denied")}>
+              jogar sem voz
+            </button>
+          </div>
+        </div>
+      )}
+      {activeVoiceRoom && user && micPermission !== "pending" && (
         <VoiceRoom
           roomId={activeVoiceRoom.id}
           identity={user.id}
           name={user.global_name ?? user.username}
           players={players}
           localPosition={localPosition}
+          micGranted={micPermission === "granted"}
         />
       )}
     </div>

@@ -10,6 +10,7 @@ import type {
   ServerToClientEvents,
   ClientToServerEvents,
 } from "@repo/shared";
+import { getToken, authHeaders } from "../lib/auth";
 
 type GameSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
@@ -21,18 +22,12 @@ export function useGameSocket(guildId: string, user: DiscordUser | null) {
   const socketRef = useRef<GameSocket | null>(null);
   const tokenRef = useRef<string | null>(null);
 
-  // Fetch discord token from cookie via server endpoint
   useEffect(() => {
     if (!user) return;
 
     async function connect() {
-      // Fetch the access token from a dedicated endpoint
-      const tokenRes = await fetch(
-        `${process.env.NEXT_PUBLIC_SERVER_URL}/auth/token`,
-        { credentials: "include" }
-      );
-      if (!tokenRes.ok) return;
-      const { token } = await tokenRes.json() as { token: string };
+      const token = getToken();
+      if (!token) return;
       tokenRef.current = token;
 
       const socket: GameSocket = io(process.env.NEXT_PUBLIC_SERVER_URL!, {
@@ -41,10 +36,9 @@ export function useGameSocket(guildId: string, user: DiscordUser | null) {
       });
 
       socket.on("connect", async () => {
-        // Load map after connecting
         const mapRes = await fetch(
           `${process.env.NEXT_PUBLIC_SERVER_URL}/api/guild/${guildId}/map`,
-          { credentials: "include" }
+          { headers: authHeaders() }
         );
         if (mapRes.ok) {
           const worldMap = await mapRes.json() as WorldMap;

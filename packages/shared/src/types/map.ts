@@ -50,6 +50,22 @@ export interface Prop {
   variant: number; // 0..n, lets the renderer vary appearance deterministically
 }
 
+// A framed picture hung on an interior room wall. Placement is deterministic
+// (seeded by the guild id, exactly like walls & doors).
+export interface Painting {
+  // World anchor on the wall-face plane (tile units, fractional). The renderer
+  // mounts the frame flush against the wall and extends it into the room.
+  x: number;
+  y: number;
+  // Which way the front of the painting faces (into the room).
+  facing: "north" | "south" | "east" | "west";
+  // Vertical span of the picture in world units (width is derived from the
+  // image aspect ratio by the renderer). Center height is fixed.
+  height: number;
+  // Index into the renderer's painting image set.
+  image: number;
+}
+
 export interface WorldMap {
   guildId: string;
   guildName: string;
@@ -59,5 +75,6 @@ export interface WorldMap {
   regions: Region[];
   tiles: Tile[][];
   props: Prop[];
+  paintings: Painting[];
   spawnPoint: { x: number; y: number };
 }

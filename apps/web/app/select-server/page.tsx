@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import styles from "./page.module.css";
+import { setToken, getToken, authHeaders } from "../../lib/auth";
 
 interface Guild {
   id: string;
@@ -18,8 +19,21 @@ export default function SelectServerPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    const hash = window.location.hash;
+    if (hash.startsWith("#token=")) {
+      setToken(hash.slice(7));
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+
+    const token = getToken();
+    if (!token) {
+      setError("Erro ao carregar servidores. Faça login novamente.");
+      setLoading(false);
+      return;
+    }
+
     fetch(`${process.env.NEXT_PUBLIC_SERVER_URL}/api/guild/list`, {
-      credentials: "include",
+      headers: authHeaders(),
     })
       .then((r) => {
         if (!r.ok) throw new Error("Unauthenticated");

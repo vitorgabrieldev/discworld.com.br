@@ -1,4 +1,7 @@
-import type { GuildStructure, WorldMap, Region, Room, Tile, BiomeType, Prop } from "@repo/shared";
+import type { GuildStructure, WorldMap, Region, Room, Tile, BiomeType, Prop, Painting } from "@repo/shared";
+
+// Number of distinct painting images the renderer ships in /public/paintings.
+const PAINTING_IMAGE_COUNT = 3;
 
 const TILE_SIZE = 32;
 const GARDEN    = 10; // grass border (in tiles) around the whole house
@@ -282,6 +285,9 @@ export function generateWorldMap(structure: GuildStructure): WorldMap {
     isGrass: (x, y) => grid[y]?.[x]?.type === "grass",
   });
 
+  // ── Wall paintings (deterministic, seeded — like doors & walls) ──────────
+  const paintings = generatePaintings(leaves, grid, rng, PAINTING_IMAGE_COUNT);
+
   // ── Spawn inside the first room ─────────────────────────────────────────
   const first = leaves[0]!;
   const spawnX = first.x + Math.floor(first.w / 2);
@@ -296,6 +302,7 @@ export function generateWorldMap(structure: GuildStructure): WorldMap {
     regions,
     tiles: grid,
     props,
+    paintings,
     spawnPoint: { x: spawnX, y: spawnY },
   };
 }
@@ -459,4 +466,88 @@ function generateGardenProps(ctx: GardenCtx): Prop[] {
   }
 
   return props;
+}
+
+// ── Wall paintings (deterministic, seeded — same rng as walls & doors) ──────
+// Rules: sparse (≤2 per room, many rooms get none), hung toward the CENTER of
+// a wall (never in the corners), at a fixed comfortable height (the renderer
+// fixes the vertical center; only the size varies, modestly). A painting is
+// only placed on a solid run of wall — never over a door.
+function generatePaintings(
+  leaves: Leaf[],
+  grid: Tile[][],
+  rng: () => number,
+  imageCount: number,
+): Painting[] {
+  const out: Painting[] = [];
+  const isWall = (x: number, y: number) => grid[y]?.[x]?.type === "wall";
+
+  for (const leaf of leaves) {
+    const iw = leaf.w - 2; // interior width  (tiles)
+    const ih = leaf.h - 2; // interior height (tiles)
+    if (iw < 4 || ih < 4) continue; // too small to host a tidy painting
+
+    // Keep it sparse: ~45% of rooms get none, ~42% one, ~13% two.
+    const roll = rng();
+    const count = roll < 0.45 ? 0 : roll < 0.87 ? 1 : 2;
+    if (count === 0) continue;
+
+    // Walls: 0=north 1=south 2=west 3=east. Shuffle so two paintings in one
+    // room land on distinct walls (naturally far apart).
+    const walls = [0, 1, 2, 3];
+    for (let i = walls.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      const tmp = walls[i]!; walls[i] = walls[j]!; walls[j] = tmp;
+    }
+
+    let placed = 0;
+    for (const wall of walls) {
+      if (placed >= count) break;
+
+      const horizontal = wall === 0 || wall === 1; // wall runs along X
+      const aLo = horizontal ? leaf.x + 1 : leaf.y + 1;
+      const aHi = horizontal ? leaf.x + leaf.w - 2 : leaf.y + leaf.h - 2;
+      const span = aHi - aLo + 1; // interior tiles along the wall
+      if (span < 3) continue;
+
+      // Trim ~28% (≥1 tile) off each end so paintings stay off the corners.
+      const margin = Math.max(1, Math.floor(span * 0.28));
+      const lo = aLo + margin, hi = aHi - margin;
+      if (lo > hi) continue;
+
+      let chosen: Painting | null = null;
+      for (let attempt = 0; attempt < 6 && !chosen; attempt++) {
+        const at = lo + Math.floor(rng() * (hi - lo + 1));
+
+        let wallCol: number, wallRow: number;
+        if (wall === 0)      { wallRow = leaf.y;              wallCol = at; }
+        else if (wall === 1) { wallRow = leaf.y + leaf.h - 1; wallCol = at; }
+        else if (wall === 2) { wallCol = leaf.x;              wallRow = at; }
+        else                 { wallCol = leaf.x + leaf.w - 1; wallRow = at; }
+
+        // The anchor tile and its along-wall neighbours must be solid wall, so
+        // the painting never sits over (or beside) a door opening.
+        const solid = horizontal
+          ? isWall(wallCol, wallRow) && isWall(wallCol - 1, wallRow) && isWall(wallCol + 1, wallRow)
+          : isWall(wallCol, wallRow) && isWall(wallCol, wallRow - 1) && isWall(wallCol, wallRow + 1);
+        if (!solid) continue;
+
+        // Anchor on the tile boundary between wall and interior; the renderer
+        // mounts the frame flush against the wall face and into the room.
+        let x: number, y: number, facing: Painting["facing"];
+        if (wall === 0)      { x = wallCol + 0.5; y = leaf.y + 1;          facing = "south"; }
+        else if (wall === 1) { x = wallCol + 0.5; y = leaf.y + leaf.h - 1; facing = "north"; }
+        else if (wall === 2) { x = leaf.x + 1;          y = wallRow + 0.5; facing = "east"; }
+        else                 { x = leaf.x + leaf.w - 1; y = wallRow + 0.5; facing = "west"; }
+
+        const height = 1.05 + rng() * 0.4; // 1.05..1.45m — gentle size variation
+        const image = Math.floor(rng() * imageCount);
+        chosen = { x, y, facing, height, image };
+      }
+
+      if (chosen) { out.push(chosen); placed++; }
+    }
+  }
+
+  return out;
 }

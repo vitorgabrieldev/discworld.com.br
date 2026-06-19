@@ -5,7 +5,10 @@ import { generateWorldMap } from "../services/mapGenerator.js";
 const DISCORD_API = "https://discord.com/api/v10";
 
 async function getDiscordToken(req: any, reply: any): Promise<string | null> {
-  const token = req.cookies.discord_token;
+  const authHeader = req.headers.authorization as string | undefined;
+  const token = authHeader?.startsWith("Bearer ")
+    ? authHeader.slice(7)
+    : req.cookies?.discord_token;
   if (!token) {
     reply.status(401).send({ error: "Unauthenticated" });
     return null;

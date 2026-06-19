@@ -20,6 +20,7 @@ interface Props {
   name: string;
   players: Record<string, Player>;
   localPosition: PlayerPosition;
+  micGranted: boolean;
 }
 
 const MAX_HEAR_DISTANCE = 8; // tiles
@@ -29,7 +30,7 @@ interface DeviceList {
   outputs: MediaDeviceInfo[];
 }
 
-export function VoiceRoom({ roomId, identity, name, players, localPosition }: Props) {
+export function VoiceRoom({ roomId, identity, name, players, localPosition, micGranted }: Props) {
   const roomRef     = useRef<Room | null>(null);
   const audioRefs   = useRef<Map<string, HTMLAudioElement>>(new Map());
   const playersRef  = useRef(players);
@@ -188,6 +189,22 @@ export function VoiceRoom({ roomId, identity, name, players, localPosition }: Pr
     for (const el of audioRefs.current.values()) {
       if ((el as any).setSinkId) (el as any).setSinkId(id).catch(() => {});
     }
+  }
+
+  if (!micGranted) {
+    return (
+      <div className={styles.noMicPopup}>
+        <div className={styles.noMicIcon}>🎙</div>
+        <p className={styles.noMicTitle}>Sem permissão de microfone</p>
+        <p className={styles.noMicDesc}>
+          Você entrou em uma sala de voz, mas o acesso ao microfone foi negado.
+          Recarregue a página e clique em <strong>Permitir microfone</strong>.
+        </p>
+        <button className={styles.noMicReload} onClick={() => window.location.reload()}>
+          Recarregar agora
+        </button>
+      </div>
+    );
   }
 
   if (!connected) {

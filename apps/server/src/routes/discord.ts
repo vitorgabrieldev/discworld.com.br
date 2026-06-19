@@ -48,21 +48,16 @@ export async function discordRoutes(app: FastifyInstance) {
         expires_in: number;
       };
 
-      reply.setCookie("discord_token", tokens.access_token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "lax",
-        maxAge: tokens.expires_in,
-        path: "/",
-      });
-
-      reply.redirect(`${process.env.FRONTEND_URL}/select-server`);
+      reply.redirect(`${process.env.FRONTEND_URL}/select-server#token=${tokens.access_token}`);
     }
   );
 
   // GET /auth/me — return current user info
   app.get("/me", async (req, reply) => {
-    const token = req.cookies.discord_token;
+    const authHeader = (req.headers.authorization as string | undefined);
+    const token = authHeader?.startsWith("Bearer ")
+      ? authHeader.slice(7)
+      : req.cookies?.discord_token;
     if (!token) {
       reply.status(401).send({ error: "Unauthenticated" });
       return;
@@ -82,7 +77,10 @@ export async function discordRoutes(app: FastifyInstance) {
 
   // GET /auth/token — expose token to frontend (for Socket.io auth)
   app.get("/token", async (req, reply) => {
-    const token = req.cookies.discord_token;
+    const authHeader = (req.headers.authorization as string | undefined);
+    const token = authHeader?.startsWith("Bearer ")
+      ? authHeader.slice(7)
+      : req.cookies?.discord_token;
     if (!token) {
       reply.status(401).send({ error: "Unauthenticated" });
       return;
